@@ -2431,7 +2431,7 @@ messages to summarise; the protected tail can exceed that cap by the whole messa
 `/compact don't lose the "auth" decisions`. The focus is passed to the summariser
 as written, including quotes, backslashes, and line breaks; no shell escaping is needed.
 You get one line with the message counts before and after and the tokens saved out
-of the total, counted as the provider reported them where the history has them. When compacting would not make the conversation
+of the total, which is the context size the status row shows, or the size of the messages when that is smaller, as right after an earlier `/compact`. When compacting would not make the conversation
 smaller, for example because the summary is longer than what it replaces, the
 conversation is left as it was and you are told so. An empty or one-message
 conversation sends nothing.

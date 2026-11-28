@@ -38,6 +38,7 @@ from pydantic_ai_harness.compaction import (
     FallbackCompaction,
     SlidingWindowCompaction,
     SummarizingCompaction,
+    estimate_context_tokens,
     estimate_message_tokens,
 )
 from pydantic_ai_harness.step_persistence.conversations import SqliteSessionStore
@@ -207,6 +208,45 @@ async def test_compact_counts_tokens_the_provider_reported() -> None:
     first, summary, *tail = transcript.messages
     assert isinstance(summary.parts[0], CompactionPart) and first is history[0]
     assert tail == history[-4:], 'at least the last 15,000 reported tokens are kept verbatim'
+
+
+def cleared_tool_results(input_tokens: int) -> list[ModelMessage]:
+    """40 tool results of 10,000 tokens each, cleared per request, so every response reports `input_tokens`."""
+    history: list[ModelMessage] = [ModelRequest.user_text_prompt('fix the bug')]
+    for index in range(40):
+        history.append(
+            ModelResponse(
+                parts=[ToolCallPart('read', {'n': index}, tool_call_id=f'call{index}')],
+                usage=RequestUsage(input_tokens=input_tokens, output_tokens=100),
+            )
+        )
+        history.append(ModelRequest(parts=[ToolReturnPart('read', 'x' * 40_000, tool_call_id=f'call{index}')]))
+    history.append(
+        ModelResponse(parts=[TextPart('done')], usage=RequestUsage(input_tokens=input_tokens, output_tokens=100))
+    )
+    return history
+
+
+async def test_compact_reports_the_context_size_the_status_row_shows() -> None:
+    """Summing per-message counts once reported about 1.6M of a 1.1M window while the row showed 473k."""
+    history = cleared_tool_results(60_000)
+    assert estimate_context_tokens(history) == 60_100 and sum(estimate_message_tokens(history)) > 400_000
+    transcript = Transcript(messages=history, model=TestModel(custom_output_text='the gist'))
+    notice = await make_plugin(transcript, strategy='truncation').commands.execute_async('/compact')
+    assert sum(estimate_message_tokens(transcript.messages)) == 50_602, 'the kept tool results are sent in full'
+    assert notice == 'Compacted 82 messages down to 12; about 9,498 of 60,100 tokens saved.'
+    # The kept responses still report the context from before; the second total is the history's own size.
+    notice = await make_plugin(transcript, strategy='truncation').commands.execute_async('/compact')
+    saved = 50_602 - sum(estimate_message_tokens(transcript.messages))
+    assert (
+        notice == f'Compacted 12 messages down to {len(transcript.messages)}; about {saved:,} of 50,602 tokens saved.'
+    )
+
+
+async def test_compact_claims_no_saving_when_the_kept_tail_outweighs_the_context() -> None:
+    transcript = Transcript(messages=cleared_tool_results(30_000), model=TestModel(custom_output_text='the gist'))
+    notice = await make_plugin(transcript, strategy='truncation').commands.execute_async('/compact')
+    assert notice == 'Compacted 82 messages down to 12.'
 
 
 async def test_compact_is_traced_with_the_global_agent_instrumentation() -> None:

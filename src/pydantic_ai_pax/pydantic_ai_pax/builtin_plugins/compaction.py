@@ -31,6 +31,7 @@ from pydantic_ai_harness.compaction import (
     SlidingWindowCompaction,
     SummarizingCompaction,
     compact_now,
+    estimate_context_tokens,
     estimate_message_tokens,
 )
 from pydantic_ai_pax.commands import Command
@@ -301,8 +302,14 @@ class CompactionPlugin(Plugin[CompactionSettings]):
             tail = min(self.settings.protected_tokens, tokens // 2)
             chain = build_chain(self.settings.model_copy(update={'protected_tokens': tail}), explicit=True)
             after = await compact_now(chain, before, model=model, focus=focus, tracer=tracer)
-        saved = tokens - sum(estimate_message_tokens(after))
-        if saved <= 0:
+        remaining = sum(estimate_message_tokens(after))
+        if remaining >= tokens:
             return 'Nothing to compact: compacting would not make the conversation smaller.'
         await conversation.commit_messages(after)
-        return f'Compacted {len(before)} messages down to {len(after)}; about {saved:,} of {tokens:,} tokens saved.'
+        # The status row's figure, which the per-message counts exceed when requests sent less than the history
+        # holds (tool results cleared per request), but which still measures the old history after a compaction.
+        context = min(estimate_context_tokens(before), tokens)
+        compacted = f'Compacted {len(before)} messages down to {len(after)}'
+        if remaining >= context:
+            return f'{compacted}.'
+        return f'{compacted}; about {context - remaining:,} of {context:,} tokens saved.'

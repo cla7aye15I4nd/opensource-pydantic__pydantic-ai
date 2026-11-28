@@ -278,7 +278,7 @@ threshold math or an orchestrator in Pax. Register the usage gauge after the
 chain so yellow means the compacted request still exceeds the threshold.
 `/compact` drives the same chain regardless of threshold, keeps the result only
 when harness `estimate_message_tokens` (provider-reported usage) says it shrank,
-and passes `runtime/agent_instrumentation.tracer()` so it is traced. Only `ModelAPIError`,
+reports the saving out of the status row's `estimate_context_tokens` figure (capped at the per-message sum), and passes `runtime/agent_instrumentation.tracer()` so it is traced. Only `ModelAPIError`,
 `FallbackExceptionGroup`, and `UsageLimitExceeded` select truncation after a
 summary failure; other exceptions propagate. Its `configure` is a `FieldMenu`
 over `CompactionSettings`; the loader's reload builds the new chain. Background

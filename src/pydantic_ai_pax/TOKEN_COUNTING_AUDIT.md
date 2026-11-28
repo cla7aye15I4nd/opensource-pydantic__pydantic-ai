@@ -36,7 +36,7 @@ already includes cache reads and writes; no Pax sum adds them again.
 | `/resume` browser `N tok` | harness `ConversationStore`: sum of `total_tokens` | Tokens processed |
 | Automatic compaction (0.85), `coder` `ClearToolResults` (0.7; #9930 would drop it) | `estimate_context_tokens` | Trigger for each |
 | Experimental background compaction (`background_start` of the 0.85 trigger), and whether its held summary still fits under the trigger | `estimate_context_tokens`, minus the `estimate_token_count` reclaim of the swap | Start and fit check |
-| `protected_tokens` tail, `/compact` "tokens saved" | `estimate_message_tokens` (`find_token_cutoff` for the tail): per-message heuristic scaled to the reported `input_tokens` between responses, heuristic alone without usage | Estimate |
+| `protected_tokens` tail, `/compact` "tokens saved" | `estimate_message_tokens` (`find_token_cutoff` for the tail): per-message heuristic scaled to the reported `input_tokens` between responses, heuristic alone without usage; the reported total is `estimate_context_tokens` (the status row's figure) capped at that sum, and the saving is the total less the kept messages | Estimate |
 | Reclaim, `compact_messages` span `tokens_before`/`tokens_after` | `estimate_token_count` (heuristic only) | Estimate |
 | Imported Claude Code and Codex sessions | per-request usage (`input + cache read + cache write`; Codex `last_token_usage`) | Set once per response, never summed |
 | Session naming | naming run's `total_tokens` | Naming cost only |
