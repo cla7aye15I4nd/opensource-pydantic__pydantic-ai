@@ -19,8 +19,6 @@ The same agent can run inside applications with different authority. Evaluate a 
 
 See [UI adapters](docs/ui/overview.md), [realtime deployment](docs/realtime/deployment.md), [workspaces](docs/workspace.md), [Pax](src/pydantic_ai_pax/README.md), and [durable execution](docs/durable_execution/overview.md).
 
-Unlaunched packages: `pydantic-ai-pax` (Pax). Maintainers handle a report against an unlaunched package as a bug, not a vulnerability. The Pax rows below still describe its intended boundary.
-
 Examples and documentation snippets show how to use an API; they are not hardened deployments. A flaw in one is a documentation bug for a public issue or pull request, unless the library code it calls breaks a documented boundary.
 
 A vulnerability in a third-party dependency or in CPython belongs to that project. When a dependency publishes a fix, the repository lock raises that dependency's floor, and the published requirements keep admitting the patched release; applications install that release themselves. Pydantic AI code does not work around the vulnerability. A CPython vulnerability fixed only in a later Python release does not change the [supported Python versions](docs/version-policy.md#support-for-python-versions); an application running an affected version carries that vulnerability until it upgrades Python. A Pydantic AI check that relies on dependency or CPython behavior is still a library control, so a bypass of that check is a Pydantic AI vulnerability.
