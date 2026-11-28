@@ -10,11 +10,11 @@ mkdir -p /tmp/gh-aw/workflow-python
 cp -R .github/scripts/pydantic_ai_gh_aw_shim /tmp/gh-aw/workflow-python/
 # Keep workflow preferences separate from runner and repository preferences.
 export XDG_CONFIG_HOME=/tmp/gh-aw/clai2-config
-# `clai2 config set` refuses run settings, since the agent can run clai2 from its shell (#13039).
+# `pax config set` refuses run settings, since the agent can run pax from its shell (#13039).
 # This host step runs before the agent starts, so it writes the settings store directly.
 PYTHONPATH=/tmp/gh-aw/workflow-python python3 -P -c '
 from pydantic_ai_gh_aw_shim.cli import run_request_limit
-from pydantic_clai2.config.settings_store import SettingsStore
+from pydantic_ai_pax.config.settings_store import SettingsStore
 
 store = SettingsStore()
 store.set("run.request_limit", run_request_limit())

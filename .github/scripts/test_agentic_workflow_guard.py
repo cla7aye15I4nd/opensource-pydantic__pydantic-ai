@@ -772,13 +772,13 @@ _PUBLIC_ENGINE_LOCK = """
 jobs:
   agent:
     env:
-      GH_AW_ENGINE_VERSION: '0.70.0'
+      GH_AW_ENGINE_VERSION: '0.76.0'
     steps:
       - id: agentic_execution
         run: >-
           awf --exclude-env ANTHROPIC_API_KEY
           --capture-command-output '${RUNNER_TEMP}/gh-aw-protected-capture-${GH_AW_PROTECTED_CAPTURE_ID}'
-          -- /bin/bash -c 'exec node /tmp/gh-aw/actions/pydantic-ai_harness.cjs clai2'
+          -- /bin/bash -c 'exec node /tmp/gh-aw/actions/pydantic-ai_harness.cjs pax'
         env:
           PAI_AGENT: pydantic_ai_gh_aw_shim.agent:agent
           PAI_RESULT_METADATA: pydantic_ai_gh_aw_shim.agent:result_metadata
@@ -800,6 +800,14 @@ def test_compiled_runner_contract_accepts_the_public_engine(tmp_path: Path):
     assert check_compiled_runner_contract(lock) == []
 
 
+def test_compiled_runner_contract_rejects_the_clai2_command(tmp_path: Path):
+    """The engine at the pinned revision runs `pax`; a lock compiled from an earlier revision runs `clai2`."""
+    lock = _write(tmp_path / 'w.lock.yml', _PUBLIC_ENGINE_LOCK.replace('harness.cjs pax', 'harness.cjs clai2'))
+    violations = check_compiled_runner_contract(lock)
+    assert [violation.check for violation in violations] == ['compiled-runner-contract']
+    assert 'public Pax harness' in violations[0].message
+
+
 def test_compiled_runner_contract_rejects_the_variable_of_older_locks(tmp_path: Path):
     """`GH_AW_MODEL` stays on the model older locks are priced for, so a new lock must read `GH_AW_ZAI_MODEL`."""
     lock = _write(tmp_path / 'w.lock.yml', _PUBLIC_ENGINE_LOCK.replace('vars.GH_AW_ZAI_MODEL', 'vars.GH_AW_MODEL'))
@@ -808,11 +816,11 @@ def test_compiled_runner_contract_rejects_the_variable_of_older_locks(tmp_path: 
     assert 'the Z.ai model from `vars.GH_AW_ZAI_MODEL`, selected through Anthropic' in violations[0].message
 
 
-@pytest.mark.parametrize('version', ['0.64.0', '0.70.0', '0.71.1', 'invalid'])
+@pytest.mark.parametrize('version', ['0.72.0', '0.73.0', '0.76.1', 'invalid'])
 def test_compiled_runner_contract_allows_compatible_runtime_upgrades(tmp_path: Path, version: str):
-    lock = _write(tmp_path / 'w.lock.yml', _PUBLIC_ENGINE_LOCK.replace('0.70.0', version))
+    lock = _write(tmp_path / 'w.lock.yml', _PUBLIC_ENGINE_LOCK.replace('0.76.0', version))
     violations = check_compiled_runner_contract(lock)
-    assert bool(violations) == (version in {'0.64.0', 'invalid'})
+    assert bool(violations) == (version in {'0.72.0', 'invalid'})
 
 
 @pytest.mark.parametrize(
@@ -893,11 +901,11 @@ def test_compiled_runner_contract_rejects_an_unavailable_policy(tmp_path: Path, 
 @pytest.mark.parametrize(
     'command',
     [
-        "echo 'pydantic-ai_harness.cjs clai2 --exclude-env ANTHROPIC_API_KEY'\nawf -- /tmp/legacy-launcher",
-        'awf -- /bin/bash -c \'echo "--exclude-env ANTHROPIC_API_KEY"; node /tmp/gh-aw/actions/pydantic-ai_harness.cjs clai2\'',
-        'awf --exclude-env ANTHROPIC_API_KEY -- /bin/bash -c \'echo "pydantic-ai_harness.cjs clai2"; /tmp/legacy-launcher\'',
-        '# pydantic-ai_harness.cjs clai2 --exclude-env ANTHROPIC_API_KEY\nawf -- /tmp/legacy-launcher',
-        "awf -- /bin/bash -c 'node /tmp/gh-aw/actions/pydantic-ai_harness.cjs clai2' --exclude-env ANTHROPIC_API_KEY",
+        "echo 'pydantic-ai_harness.cjs pax --exclude-env ANTHROPIC_API_KEY'\nawf -- /tmp/legacy-launcher",
+        'awf -- /bin/bash -c \'echo "--exclude-env ANTHROPIC_API_KEY"; node /tmp/gh-aw/actions/pydantic-ai_harness.cjs pax\'',
+        'awf --exclude-env ANTHROPIC_API_KEY -- /bin/bash -c \'echo "pydantic-ai_harness.cjs pax"; /tmp/legacy-launcher\'',
+        '# pydantic-ai_harness.cjs pax --exclude-env ANTHROPIC_API_KEY\nawf -- /tmp/legacy-launcher',
+        "awf -- /bin/bash -c 'node /tmp/gh-aw/actions/pydantic-ai_harness.cjs pax' --exclude-env ANTHROPIC_API_KEY",
     ],
 )
 def test_compiled_runner_contract_rejects_decoy_command_text(tmp_path: Path, command: str):

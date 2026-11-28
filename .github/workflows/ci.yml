@@ -577,7 +577,7 @@ jobs:
           # `shared/engine-zai.md` imports, with the Logfire install that the workflows' OTLP endpoint
           # turns on. Update it when that import changes.
           python3 -P -m pip install --quiet --user --disable-pip-version-check \
-            "pydantic-ai-harness[coder]==$version" "pydantic-clai2==$version" \
+            "pydantic-ai-harness[coder]==$version" "pydantic-ai-pax==$version" \
             "pydantic-ai-slim[anthropic,openai,mcp,spec]>=2.59.0" "cryptography>=48.0.1" "logfire>=4.39.0"
           bash .github/scripts/stage-gh-aw-agent.sh
           # The engine then imports the agent module `PAI_AGENT` names, with the environment

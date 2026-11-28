@@ -690,7 +690,7 @@ v1.3.1 grants `id-token: write` to every lock's `activation` and `conclusion` jo
 gh-aw emits admission steps only when `aw.json` sets `"admission": true` or a source sets `on.admission`.
 Neither is set here, so no step in these locks mints a token.
 `shared/engine-zai.md` sets `max-ai-credits: -1`; AWF accepts that value only from v0.29.1.
-`shared/engine-zai.md` imports the public Pydantic AI engine and explicitly pins runtime 0.70.0. Keep each workflow's
+`shared/engine-zai.md` imports the public Pydantic AI engine and explicitly pins runtime 0.76.0. Keep each workflow's
 root engine block model-only; the shared import owns identity and credentials.
 Each workflow reads its model from the `GH_AW_ZAI_MODEL` repository variable.
 Keep `GH_AW_MODEL` on `glm-5.3-flash`, so a lock from before #14254 cannot reach `glm-5.4`.

@@ -570,8 +570,8 @@ def check_compiled_runner_contract(lock: Path) -> list[Violation]:
     missing: list[str] = []
     runtime = str(_as_mapping(agent.get('env')).get('GH_AW_ENGINE_VERSION', ''))
     runtime_match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', runtime)
-    if runtime_match is None or tuple(map(int, runtime_match.groups())) < (0, 70, 0):
-        missing.append('a published runtime pin of 0.70.0 or newer')
+    if runtime_match is None or tuple(map(int, runtime_match.groups())) < (0, 73, 0):
+        missing.append('a published runtime pin of 0.73.0 or newer')
     if len(executions) != 1:
         missing.append('exactly one public engine execution')
     else:
@@ -595,7 +595,7 @@ def check_compiled_runner_contract(lock: Path) -> list[Violation]:
             and command[0] == 'exec'
             and command[1] in {'node', '$GH_AW_NODE_EXEC'}
             and command[2] in harness_paths
-            and command[3] == 'clai2'
+            and command[3] == 'pax'
             for command in harness_commands[-1:]
         ):
             missing.append('the public Pax harness')
