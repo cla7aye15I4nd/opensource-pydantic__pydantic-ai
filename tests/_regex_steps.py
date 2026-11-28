@@ -3,13 +3,14 @@
 `re` reports no step count, and a time bound flakes on a shared runner (see "Test cost" in `tests/AGENTS.md`).
 `StepCounter` runs a pattern on the tree `re` parses it into and backtracks through it in `re`'s order: alternatives
 left to right, greedy repeats longest first, lazy ones shortest first, possessive repeats and atomic groups without
-giving anything back. It counts one step per node it tries, so a count is exact, and the same on any runner.
+giving anything back. It counts one step per node it tries, and one per character a backreference compares, so a count
+is exact, and the same on any runner.
 
 Only that control flow is reimplemented. Whether a character matches a literal, a set or `.`, and whether an anchor
 holds, is asked of `re` itself by compiling that one node, so flags and Unicode categories behave exactly as in `re`.
 The tree and the one-node compile come from `re._parser` and `re._compiler`, which `re.compile` is built on and which
 publish no types, so their values are read as `object` and narrowed. A construct this module does not model, such as
-a backreference, raises `NotImplementedError` rather than being counted wrongly.
+a conditional group or a case-insensitive backreference, raises `NotImplementedError` rather than being counted wrongly.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import sys
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import NamedTuple, TypeGuard
+from typing import Literal, NamedTuple, TypeGuard
 
 _parser = importlib.import_module('re._parser')
 _compiler = importlib.import_module('re._compiler')
@@ -35,6 +36,8 @@ Continuation = Callable[[int], bool]
 """What to match after a node, given the position the node ended at; `True` once the whole pattern matched."""
 Matcher = Callable[[int, Continuation], bool]
 """Match a node at a position, handing the end of each way it matches to the continuation, in `re`'s order."""
+Method = Literal['scan', 'match', 'fullmatch']
+"""The `StepCounter` method that runs a pattern the way its call does: `scan` for every call but `match` and `fullmatch`."""
 
 
 class Node(NamedTuple):
@@ -149,13 +152,16 @@ def _recursion_limit(limit: int) -> Generator[None]:
 
 
 class StepCounter:
-    """Scan text with a pattern as `re.finditer`, `search` or `match` does, counting the steps the backtracking takes."""
+    """Scan text with a pattern as `re.finditer`, `search`, `match` or `fullmatch` does, counting the steps the
+    backtracking takes."""
 
     def __init__(self, pattern: str, flags: int = 0) -> None:
         nodes, pattern_flags = parse(pattern, flags)
         self._text = ''
         self._steps = 0
         self._budget = 0
+        self._groups: dict[int, tuple[int, int] | None] = {}
+        """The span each capturing group last matched in the current attempt, for a backreference to read."""
         self._match = self._sequence(nodes, pattern_flags)
 
     def scan(self, text: str, budget: int) -> Scan:
@@ -177,25 +183,32 @@ class StepCounter:
         """Find a match that starts at `position`, as `re.Pattern.match` does."""
         return self._first(text, budget, position, last_start=position)
 
-    def _first(self, text: str, budget: int, position: int, last_start: int) -> Scan:
+    def fullmatch(self, text: str, budget: int, position: int = 0) -> Scan:
+        """Find a match from `position` to the end of `text`, as `re.Pattern.fullmatch` does."""
+        return self._first(text, budget, position, last_start=position, end=len(text))
+
+    def _first(self, text: str, budget: int, position: int, last_start: int, end: int | None = None) -> Scan:
         self._text, self._steps, self._budget = text, 0, budget
         with _recursion_limit(50 * len(text) + 1_000):
-            span = self._search(position, False, last_start)
+            span = self._search(position, False, last_start, end)
         return Scan([] if span is None else [span], self._steps)
 
-    def _search(self, position: int, after_empty_match: bool, last_start: int) -> tuple[int, int] | None:
-        """The first match that starts from `position` to `last_start`.
+    def _search(
+        self, position: int, after_empty_match: bool, last_start: int, end: int | None = None
+    ) -> tuple[int, int] | None:
+        """The first match that starts from `position` to `last_start`, and ends at `end` if one is given.
 
         Right after an empty match, not another empty one at `position`.
         """
         for start in range(position, last_start + 1):
             ends: list[int] = []
             must_advance = after_empty_match and start == position
+            self._groups = {}
 
-            def accept(end: int, start: int = start, must_advance: bool = must_advance) -> bool:
-                if must_advance and end == start:
+            def accept(match_end: int, start: int = start, must_advance: bool = must_advance) -> bool:
+                if (must_advance and match_end == start) or (end is not None and match_end != end):
                     return False
-                ends.append(end)
+                ends.append(match_end)
                 return True
 
             if self._match(start, accept):
@@ -230,7 +243,13 @@ class StepCounter:
                 assert _is_object_list(alternatives)
                 return self._branch([self._sequence(_nodes(alternative), flags) for alternative in alternatives])
             case 'SUBPATTERN':
-                return self._sequence(*_group(node.argument, flags))
+                assert _is_object_tuple(node.argument)
+                group, body = node.argument[0], self._sequence(*_group(node.argument, flags))
+                return body if group is None else self._capture(body, _int(group))
+            case 'GROUPREF':
+                if flags & re.IGNORECASE:
+                    raise NotImplementedError('`StepCounter` does not model a case-insensitive GROUPREF')
+                return self._backreference(_int(node.argument))
             case 'ATOMIC_GROUP':
                 return self._atomic(self._sequence(_nodes(node.argument), flags))
             case 'ASSERT' | 'ASSERT_NOT':
@@ -284,11 +303,51 @@ class StepCounter:
         matcher(position, first)
         return ends[0] if ends else None
 
+    def _capture(self, body: Matcher, group: int) -> Matcher:
+        """A capturing group, which records its span for a backreference until a backtrack undoes it."""
+
+        def capture(position: int, then: Continuation) -> bool:
+            def close(end: int) -> bool:
+                previous = self._groups.get(group)
+                self._groups[group] = (position, end)
+                if then(end):
+                    return True
+                self._groups[group] = previous
+                return False
+
+            return body(position, close)
+
+        return capture
+
+    def _backreference(self, group: int) -> Matcher:
+        """A backreference, which fails while its group is unset, and compares one character at a time, as `re` does."""
+
+        def backreference(position: int, then: Continuation) -> bool:
+            self._step()
+            span = self._groups.get(group)
+            if span is None:
+                return False
+            text, (start, end) = self._text, span
+            for offset in range(end - start):
+                self._step()
+                if position + offset >= len(text) or text[position + offset] != text[start + offset]:
+                    return False
+            return then(position + end - start)
+
+        return backreference
+
+    # An atomic group, a lookaround and a possessive repeat each commit to their body's first match, so the captures
+    # it recorded outlive the body. When what follows fails, they undo those captures themselves.
+
     def _atomic(self, body: Matcher) -> Matcher:
         def atomic(position: int, then: Continuation) -> bool:
             self._step()
+            groups = dict(self._groups)
             end = self._first_end(body, position)
-            return end is not None and then(end)
+            if end is not None and then(end):
+                return True
+            self._groups = groups
+            return False
 
         return atomic
 
@@ -297,9 +356,13 @@ class StepCounter:
 
         def lookaround(position: int, then: Continuation) -> bool:
             self._step()
+            groups = dict(self._groups)
             start = position - behind
             found = start >= 0 and body(start, lambda end: end == position or not behind)
-            return found == want and then(position)
+            if found == want and then(position):
+                return True
+            self._groups = groups
+            return False
 
         return lookaround
 
@@ -338,13 +401,17 @@ class StepCounter:
 
         def possessive(position: int, then: Continuation) -> bool:
             self._step()
+            groups = dict(self._groups)
             count = 0
             while count < high:
                 end = self._first_end(body, position)
                 if end is None or (end == position and count >= low):
                     break
                 position, count = end, count + 1
-            return count >= low and then(position)
+            if count >= low and then(position):
+                return True
+            self._groups = groups
+            return False
 
         def iterate(position: int, then: Continuation, count: int) -> bool:
             self._step()
@@ -472,18 +539,26 @@ def shape(pattern: str, flags: int) -> Shape:
     return Shape(sorted(walk.units), reach, unbounded, walk.nodes)
 
 
-def linearity_failure(pattern: str, flags: int) -> str | None:
-    """How scanning repeated adversarial input with `pattern` fails to stay linear, or `None` if it stays linear.
+def linearity_failure(pattern: str, flags: int, method: Method = 'scan') -> str | None:
+    """How running `pattern` with `method` on repeated adversarial input fails to stay linear, or `None` if it stays linear.
 
     Each pump unit is repeated into an input long enough to read past every bounded part of a match attempt, then
-    followed by `!`, which few patterns accept, so the last attempts fail. Each scan must find what `re.finditer`
-    finds, and stay within `4 * nodes * (reach + 1)` steps per character: a linear scan tries each node about once
+    followed by `!`, which few patterns accept, so the last attempts fail. Each run must find what `re` finds with the
+    same call, and stay within `4 * nodes * (reach + 1)` steps per character: a linear scan tries each node about once
     per character an attempt reads. A pattern without an unbounded repeat reads at most `reach` characters per
-    attempt, so that one scan is enough. One with an unbounded repeat is also scanned at twice and four times that
+    attempt, so that one run is enough. One with an unbounded repeat is also run at twice and four times that
     length, and must add no more than `GROWTH_LIMIT` times as many steps for the second doubling as for the first.
+    `match` and `fullmatch` make their one attempt at the start of the input, where each unit starts with the literal
+    text before its repeat.
     """
     counter = StepCounter(pattern, flags)
     compiled = re.compile(pattern, flags)
+    calls: dict[Method, tuple[Callable[[str, int], Scan], Callable[[str], list[tuple[int, int]]]]] = {
+        'scan': (counter.scan, lambda text: [m.span() for m in compiled.finditer(text)]),
+        'match': (counter.match, lambda text: [m.span() for m in [compiled.match(text)] if m]),
+        'fullmatch': (counter.fullmatch, lambda text: [m.span() for m in [compiled.fullmatch(text)] if m]),
+    }
+    run, found = calls[method]
     pattern_shape = shape(pattern, flags)
     sizes = (1, 2, 4) if pattern_shape.unbounded else (1,)
     for unit in pattern_shape.units:
@@ -493,12 +568,10 @@ def linearity_failure(pattern: str, flags: int) -> str | None:
             text = unit * repeats * size + '!'
             budget = len(text) * 4 * pattern_shape.nodes * (pattern_shape.reach + 1)
             try:
-                scan = counter.scan(text, budget)
+                scan = run(text, budget)
             except StepBudgetExceeded:
                 return f'{unit!r} * {repeats * size}: over {budget} steps'
-            assert scan.spans == [m.span() for m in compiled.finditer(text)], (
-                f'`StepCounter` disagrees with `re` on {text!r}'
-            )
+            assert scan.spans == found(text), f'`StepCounter` disagrees with `re` on {text!r}'
             steps.append(scan.steps)
         if pattern_shape.unbounded and steps[2] - steps[1] > GROWTH_LIMIT * (steps[1] - steps[0]):
             return f'{unit!r} * {repeats}, {2 * repeats}, {4 * repeats}: {steps} steps'

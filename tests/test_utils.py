@@ -48,8 +48,8 @@ from pydantic_ai.models.test import TestModel
 from tests._timeouts import READINESS_WAIT_TIMEOUT
 
 from ._inline_snapshot import snapshot
+from ._regex_steps import Scan, StepCounter
 from .conftest import no_leaked_tasks, undrivable_event_loop
-from .harness._regex_steps import Scan, StepCounter
 from .models.mock_async_stream import MockAsyncStream
 from .realtime.simulation._loop import SimulatedLoop
 

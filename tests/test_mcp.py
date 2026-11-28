@@ -74,8 +74,8 @@ from pydantic_ai.usage import RunUsage
 from tests._timeouts import READINESS_WAIT_TIMEOUT
 from tests.function_model_prefix import INSTRUCTIONS_CHANGE_MID_RUN
 
+from ._regex_steps import linearity_failure
 from .conftest import IsStr, try_import
-from .harness._regex_steps import linearity_failure
 
 with try_import() as logfire_imports_successful:
     import logfire
