@@ -17,6 +17,14 @@ CI already fails `tests/cost_guards.py` violations, orphan or partly played cass
 - A dependency change in `src/pydantic_ai_harness/pyproject.toml` when the pull request body in `pr-details.json` links no issue.
 - Lockfile content written by hand: conflict markers, a version bump whose artifact URLs, hashes and `upload-time` did not change, or a wheel filename that disagrees with its `version`.
 
+### `high`: a supply-chain item
+
+- A package index other than `https://pypi.org/simple`, or an artifact URL outside `files.pythonhosted.org`.
+- A new `git`, `url` or `path` source, unless it pins a full commit SHA of a Pydantic repository.
+- The global `exclude-newer` removed or raised, an `exclude-newer-package` entry set to `false` for a package Pydantic does not publish, or a new cutoff with no reason comment.
+- In an npm lockfile, a `resolved` URL outside `registry.npmjs.org`, a missing `integrity`, or a `git+`, `file:` or tarball specifier.
+- A changed `.github/aw/actions-lock.json` with no workflow change, or a pin that is not a full commit SHA.
+
 ### `medium`: everything else this check covers
 
 - **Coverage.** The changed tests do not exercise the behavior the pull request changes, including both sides of a changed branch and each side of a profile flag. Compare the production change under `pr-head/` with the root. A test whose assertions do not match its name or docstring. When a changed assertion checks less than its base version, name in the finding a wrong result the head test now accepts.
@@ -24,8 +32,6 @@ CI already fails `tests/cost_guards.py` violations, orphan or partly played cass
 - **Test shape.** A unit test that does not say why it is not a VCR test. A test of a private method where a public API reaches the behavior. Many small single-branch tests of one private entry point that one integration test would cover. A feature test appended to a provider's test file instead of `tests/test_<feature>.py`.
 - **Cassettes.** Signs of a copied or hand-edited cassette: a response id or `date` header that another cassette also has, body text changed while ids and dates stayed the same, or a request whose model, prompt, tools or settings do not match the test. A cassette whose response names a different model than its request. A newer dated identifier of the same model is allowed. A request model that differs from the model the test configures. An error response in a test that asserts success. A re-recorded request body that changed with no matching code or test change. A `[param-id]` cassette whose id matches no current parameter.
 - **Dependencies.** An upper cap added with no migration reason. A new dependency that nothing under `pr-head/` imports. A new optional extra in `pydantic_ai_slim` that `docs/install.md` does not mention. Lock changes that the manifest changes do not explain, in a pull request that is not a lock bump. A floor raised for a security fix, which belongs in `[tool.uv] constraint-dependencies`.
-- **Supply chain.** A package index other than `https://pypi.org/simple`, or an artifact URL outside `files.pythonhosted.org`. A new `git`, `url` or `path` source, unless it pins a full commit SHA of a Pydantic repository. The global `exclude-newer` removed or raised, an `exclude-newer-package` entry set to `false` for a package Pydantic does not publish, or a new cutoff with no reason comment. In an npm lockfile, a `resolved` URL outside `registry.npmjs.org`, a missing `integrity`, or a `git+`, `file:` or tarball specifier. A changed `.github/aw/actions-lock.json` with no workflow change, or a pin that is not a full commit SHA.
-
 ### Do not flag
 
 - A lock-only bump within the declared ranges, from PyPI.
