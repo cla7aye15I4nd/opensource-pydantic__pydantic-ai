@@ -1141,6 +1141,8 @@ All output hooks receive an `output_context` parameter with [`OutputContext`][py
 | [`wrap_output_process`][pydantic_ai.capabilities.AbstractCapability.wrap_output_process] | `(ctx, *, output_context, output: Any, handler) -> Any` | Wrap the complete processing lifecycle |
 | [`on_output_process_error`][pydantic_ai.capabilities.AbstractCapability.on_output_process_error] | `(ctx, *, output_context, output: Any, error: Exception) -> Any` | Handle core processing errors (see [error hooks](#error-hooks)) |
 
+With a [union output type](../output.md#structured-output), an output hook can change the value before it's processed, such as `before_output_process` returning a value of another member's type. A value that `on_output_validate_error` returns comes with no picked member. Either way, the member the model picked processes the value if there is one and the value still matches its type. Otherwise the first member in union order whose type the value matches processes it. An output function's type is the type of its argument; a `TypedDict` matches any `dict`, and a `NewType` matches the type it wraps. An output function that takes more than one argument is never matched this way. If no member matches, the value becomes the output as is, and no output function runs.
+
 Output validate and process hooks can raise [`ModelRetry`][pydantic_ai.exceptions.ModelRetry] to ask the model to try again with a custom message — the same pattern used in [output functions](../output.md#output-functions) and [output validators](../output.md#output-validator-functions). See [Triggering retries with `ModelRetry`](../hooks.md#triggering-retries-with-modelretry) for the full pattern.
 
 ### Tool preparation

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import partial
 from types import FunctionType, MethodType, NoneType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Self, cast, get_args, get_origin, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, NewType, Self, cast, get_args, get_origin, overload
 
 import pydantic_core
 from pydantic import BaseModel, Json, TypeAdapter, ValidationError, create_model
@@ -21,7 +21,8 @@ from pydantic_core import (
     SchemaValidator,
     to_json,
 )
-from typing_extensions import TypedDict, TypeForm, TypeVar
+from typing_extensions import TypedDict, TypeForm, TypeVar, is_typeddict
+from typing_inspection import typing_objects
 
 from pydantic_ai._utils import get_function_type_hints
 
@@ -119,17 +120,29 @@ def _build_output_handlers(
     return do_validate, do_process
 
 
-def _isinstance_maybe_generic(value: Any, type_: type[Any]) -> bool:
+def _isinstance_maybe_generic(value: object, type_: type[Any] | NewType) -> bool:
     """`isinstance(value, type_)` that also works for generics like `list[Bar]`, `Literal[...]` and `Annotated[Bar, ...]`.
 
     `isinstance(x, list[Bar])` raises `TypeError`; we fall back to the generic origin
     (here `list`), so union output resolution still matches the collection type when the
-    element type can't be checked at runtime.
+    element type can't be checked at runtime. A `TypedDict`, generic or not, matches a `dict`,
+    and a `NewType` matches the type it wraps.
     """
     type_ = _utils.unwrap_annotated(type_)
     if get_origin(type_) is Literal:
         # `isinstance` can't check a `Literal`, nor its origin; a value matches it if it's one of its values.
         return value in get_args(type_)
+    if typing_objects.is_newtype(type_):
+        # `isinstance` can't check a `NewType`; its values are instances of the type it wraps.
+        try:
+            return _isinstance_maybe_generic(value, type_.__supertype__)
+        except TypeError:
+            # The wrapped type is one neither `isinstance` nor its origin can check, like a generic type alias.
+            return False
+    if is_typeddict(get_origin(type_) or type_):
+        # `isinstance` can't check a `TypedDict`, nor the origin of a parametrized generic one;
+        # its values are plain dicts.
+        return isinstance(value, dict)
     try:
         return isinstance(value, type_)
     except TypeError:

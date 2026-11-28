@@ -8,15 +8,15 @@ from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, Self, TypeVar, Union
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, NewType, Self, TypeVar, Union
 
 import anyio
 import pytest
 from dirty_equals import IsJson
-from pydantic import AliasChoices, AliasPath, BaseModel, Field, TypeAdapter, field_validator
+from pydantic import AliasChoices, AliasPath, BaseModel, Field, TypeAdapter, ValidationError, field_validator
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import ErrorDetails, to_json
-from typing_extensions import TypedDict
+from typing_extensions import TypeAliasType, TypedDict
 
 from pydantic_ai import (
     AbstractToolset,
@@ -99,7 +99,7 @@ from pydantic_ai.native_tools import (
     WebSearchTool,
     WebSearchUserLocation,
 )
-from pydantic_ai.output import OutputObjectDefinition, StructuredDict, ToolOutput
+from pydantic_ai.output import OutputContext, OutputObjectDefinition, StructuredDict, ToolOutput
 from pydantic_ai.providers import Provider
 from pydantic_ai.realtime import RealtimeModelSettings
 from pydantic_ai.result import RunUsage
@@ -2812,6 +2812,322 @@ def test_output_type_union_literal_member(output_type: OutputSpec[Literal['red',
     agent = Agent(FunctionModel(return_literal), output_type=output_type)
     result = agent.run_sync('What color is it?')
     assert result.output == 'green'
+
+
+# The union output tests below use `FunctionModel`: union resolution runs on the response after it's parsed, so a
+# recorded provider response would exercise nothing more.
+class UnionPoint(TypedDict):
+    x: int
+    y: int
+
+
+UnionUserId = NewType('UnionUserId', int)
+
+
+def union_point_to_str(point: UnionPoint) -> str:
+    return f'point {point["x"]},{point["y"]}'
+
+
+def union_user_id_to_str(user_id: UnionUserId) -> str:
+    return f'user {user_id}'
+
+
+@pytest.mark.parametrize(
+    'replaced_by_hook',
+    [
+        pytest.param(False, id='picked'),
+        pytest.param(True, id='replaced-by-hook'),
+    ],
+)
+@pytest.mark.parametrize(
+    'output_type_factory',
+    [
+        pytest.param(NativeOutput, id='native'),
+        pytest.param(PromptedOutput, id='prompted'),
+    ],
+)
+@pytest.mark.parametrize(
+    'output_function,kind,data,argument,expected',
+    [
+        pytest.param(
+            union_point_to_str, 'UnionPoint', {'x': 1, 'y': 2}, {'x': 1, 'y': 2}, 'point 1,2', id='typed-dict-arg'
+        ),
+        pytest.param(union_user_id_to_str, 'union_user_id_to_str', {'user_id': 5}, 5, 'user 5', id='new-type-arg'),
+    ],
+)
+def test_output_type_union_function_member_runtime_uncheckable_arg(
+    output_type_factory: Callable[[Any], Any],
+    output_function: Callable[..., str],
+    kind: str,
+    data: dict[str, Any],
+    argument: Any,
+    expected: str,
+    replaced_by_hook: bool,
+):
+    """A union output picking an output function whose argument is a `TypedDict` or `NewType` runs the function,
+    instead of returning its validated argument because `isinstance` can't check those types.
+
+    The function also runs when the model picks another member and a hook replaces that output with the function's
+    argument, which makes the union resolve the member by value.
+    """
+
+    def replace_output_with_argument(ctx: RunContext[Any], /, *, output_context: OutputContext, output: Any) -> Any:
+        return argument
+
+    sent_kind, sent_data = ('Banana', {'length': 1.0}) if replaced_by_hook else (kind, data)
+
+    def return_member(_: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        text = json.dumps({'result': {'kind': sent_kind, 'data': sent_data}})
+        return ModelResponse(parts=[TextPart(content=text)])
+
+    agent = Agent(
+        FunctionModel(return_member),
+        output_type=output_type_factory([output_function, Banana]),
+        capabilities=[Hooks(before_output_process=replace_output_with_argument)] if replaced_by_hook else [],
+    )
+    result = agent.run_sync('Hello')
+    assert result.output == expected
+
+
+def union_counts_to_str(counts: dict[str, int]) -> str:
+    return f'counts {len(counts)}'
+
+
+def union_int_to_str(number: int) -> str:
+    return f'int {number}'
+
+
+@pytest.mark.parametrize(
+    'output_type_factory',
+    [
+        pytest.param(NativeOutput, id='native'),
+        pytest.param(PromptedOutput, id='prompted'),
+    ],
+)
+@pytest.mark.parametrize(
+    'reversed_order',
+    [
+        pytest.param(False, id='as-listed'),
+        pytest.param(True, id='reversed'),
+    ],
+)
+@pytest.mark.parametrize(
+    'output_functions,picks',
+    [
+        pytest.param(
+            [union_point_to_str, union_counts_to_str],
+            [
+                ('UnionPoint', {'x': 1, 'y': 2}, 'point 1,2'),
+                ('union_counts_to_str', {'counts': {'x': 1, 'y': 2}}, 'counts 2'),
+            ],
+            id='typed-dict-arg-next-to-dict-arg',
+        ),
+        pytest.param(
+            [union_user_id_to_str, union_int_to_str],
+            [
+                ('union_user_id_to_str', {'user_id': 5}, 'user 5'),
+                ('union_int_to_str', {'number': 5}, 'int 5'),
+            ],
+            id='new-type-arg-next-to-wrapped-type-arg',
+        ),
+    ],
+)
+def test_output_type_union_function_member_next_to_same_runtime_type_member(
+    output_type_factory: Callable[[Any], Any],
+    output_functions: list[Callable[..., str]],
+    picks: list[tuple[str, dict[str, Any], str]],
+    reversed_order: bool,
+):
+    """A `TypedDict` or `NewType` argument's function runs when the model picks it, and a sibling function whose
+    argument takes the same runtime value (a plain `dict`, the type the `NewType` wraps) runs when the model picks that,
+    in either union order.
+    """
+    responses = iter(json.dumps({'result': {'kind': kind, 'data': data}}) for kind, data, _ in picks)
+
+    def return_next_member(_: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=next(responses))])
+
+    members = output_functions[::-1] if reversed_order else output_functions
+    agent = Agent(FunctionModel(return_next_member), output_type=output_type_factory(members))
+    assert [agent.run_sync('Hello').output for _ in picks] == [expected for _, _, expected in picks]
+
+
+class UnionGenericPoint(TypedDict, Generic[T]):
+    x: T
+
+
+def union_generic_point_to_str(point: UnionGenericPoint[int]) -> str:
+    return f'generic point {point["x"]}'
+
+
+@pytest.mark.parametrize(
+    'output_type_factory',
+    [
+        pytest.param(NativeOutput, id='native'),
+        pytest.param(PromptedOutput, id='prompted'),
+    ],
+)
+@pytest.mark.parametrize(
+    'member,kind,data,expected',
+    [
+        pytest.param(UnionGenericPoint[int], 'UnionGenericPoint', {'response': {'x': 1}}, {'x': 1}, id='type'),
+        pytest.param(
+            union_generic_point_to_str,
+            'union_generic_point_to_str',
+            {'point': {'x': 1}},
+            'generic point 1',
+            id='function-arg',
+        ),
+    ],
+)
+def test_output_type_union_generic_typed_dict_member(
+    output_type_factory: Callable[[Any], Any],
+    member: Any,
+    kind: str,
+    data: dict[str, Any],
+    expected: Any,
+):
+    """A union picking a parametrized generic `TypedDict` member, or an output function whose argument is one,
+    returns the dict or runs the function, instead of raising `TypeError` because `isinstance` can't check a
+    `TypedDict`.
+    """
+
+    def return_member(_: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=json.dumps({'result': {'kind': kind, 'data': data}}))])
+
+    agent = Agent(FunctionModel(return_member), output_type=output_type_factory([member, Banana]))
+    assert agent.run_sync('Hello').output == expected
+
+
+def replace_output_with_union_point(
+    ctx: RunContext[Any], /, *, output_context: OutputContext, output: Any
+) -> UnionPoint:
+    return {'x': 1, 'y': 2}
+
+
+def replace_output_with_banana(ctx: RunContext[Any], /, *, output_context: OutputContext, output: Any) -> Banana:
+    return Banana(length=1)
+
+
+@pytest.mark.parametrize(
+    'output_type_factory',
+    [
+        pytest.param(NativeOutput, id='native'),
+        pytest.param(PromptedOutput, id='prompted'),
+    ],
+)
+@pytest.mark.parametrize(
+    'kind,data,capabilities,expected',
+    [
+        pytest.param('UnionPoint', {'x': 1, 'y': 2}, [], {'x': 1, 'y': 2}, id='picked'),
+        pytest.param(
+            'Banana',
+            {'length': 1.0},
+            [Hooks(before_output_process=replace_output_with_union_point)],
+            {'x': 1, 'y': 2},
+            id='replaced-by-hook',
+        ),
+        pytest.param(
+            'UnionPoint',
+            {'x': 1, 'y': 2},
+            [Hooks(before_output_process=replace_output_with_banana)],
+            Banana(length=1),
+            id='replaced-by-hook-with-other-member',
+        ),
+    ],
+)
+def test_output_type_union_typed_dict_member_next_to_dict_arg_function(
+    output_type_factory: Callable[[Any], Any],
+    kind: str,
+    data: dict[str, Any],
+    capabilities: list[AbstractCapability[Any]],
+    expected: Any,
+):
+    """A union's `TypedDict` member returns its dict instead of a sibling output function, whose argument is a plain
+    `dict`, running on it. That holds when the model picks the member, and when a hook replaces the output with a
+    dict: resolving a value takes the first member in union order whose type matches it, as it does for a
+    `dict[str, int]` member. A value that isn't a dict goes past the `TypedDict` member to the member it matches.
+    """
+
+    def return_member(_: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=json.dumps({'result': {'kind': kind, 'data': data}}))])
+
+    agent = Agent(
+        FunctionModel(return_member),
+        output_type=output_type_factory([UnionPoint, union_counts_to_str, Banana]),
+        capabilities=capabilities,
+    )
+    assert agent.run_sync('Hello').output == expected
+
+
+UnionIntsAlias = TypeAliasType('UnionIntsAlias', list[T], type_params=(T,))
+UnionAliasedIds = NewType('UnionAliasedIds', UnionIntsAlias[int])
+
+
+def union_aliased_ids_to_str(ids: UnionAliasedIds) -> str:
+    return f'ids {ids}'  # pragma: no cover
+
+
+def recover_output_with_banana(
+    ctx: RunContext[Any],
+    /,
+    *,
+    output_context: OutputContext,
+    output: str | dict[str, Any],
+    error: ValidationError | ModelRetry,
+) -> Banana:
+    return Banana(length=1)
+
+
+UNION_ALIASED_IDS_PICKED = json.dumps({'result': {'kind': 'union_aliased_ids_to_str', 'data': {'ids': [1, 2]}}})
+
+
+@pytest.mark.parametrize(
+    'output_type_factory',
+    [
+        pytest.param(NativeOutput, id='native'),
+        pytest.param(PromptedOutput, id='prompted'),
+    ],
+)
+@pytest.mark.parametrize(
+    'text,capabilities,expected',
+    [
+        pytest.param(UNION_ALIASED_IDS_PICKED, [], [1, 2], id='picked'),
+        pytest.param(
+            'not json', [Hooks(output_validate_error=recover_output_with_banana)], Banana(length=1), id='recovered'
+        ),
+        pytest.param(
+            UNION_ALIASED_IDS_PICKED,
+            [Hooks(before_output_process=replace_output_with_banana)],
+            Banana(length=1),
+            id='replaced-by-hook',
+        ),
+    ],
+)
+def test_output_type_union_new_type_over_uncheckable_alias_member(
+    output_type_factory: Callable[[Any], Any],
+    text: str,
+    capabilities: list[AbstractCapability[Any]],
+    expected: Any,
+):
+    """A union member whose `NewType` argument wraps a type that neither `isinstance` nor its origin can check, such as
+    a generic type alias, matches no value instead of raising `TypeError`. Picking it returns the validated argument
+    without running the function, and error recovery or a hook replacing the output with another member returns that
+    member.
+
+    The `picked` expectation is the current behavior, not a contract: #15113 tracks matching values against type
+    aliases, which would make the function run.
+    """
+
+    def return_text(_: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=text)])
+
+    agent = Agent(
+        FunctionModel(return_text),
+        output_type=output_type_factory([union_aliased_ids_to_str, Banana]),
+        capabilities=capabilities,
+    )
+    assert agent.run_sync('Hello').output == expected
 
 
 def test_output_type_union_text_fallback_invalid_data_retries():
