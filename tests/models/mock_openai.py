@@ -234,3 +234,17 @@ def response_message(
         tools=[],
         usage=usage,
     )
+
+
+def response_stream(events: Sequence[responses.ResponseStreamEvent]) -> list[responses.ResponseStreamEvent]:
+    """`events` between a `response.created` and a `response.completed` event, numbered in stream order."""
+    response = response_message([])
+    return [
+        responses.ResponseCreatedEvent(response=response, type='response.created', sequence_number=0),
+        *(event.model_copy(update={'sequence_number': index}) for index, event in enumerate(events, 1)),
+        responses.ResponseCompletedEvent(
+            response=response.model_copy(update={'status': 'completed'}),
+            type='response.completed',
+            sequence_number=len(events) + 1,
+        ),
+    ]
